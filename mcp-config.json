@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "codegraph": {
+      "command": "cargo",
+      "args": ["run", "--quiet"],
+      "cwd": "/Users/subhankarchowdhury/devfolder/mcps/codegraph-mcp"
+    }
+  }
+}
