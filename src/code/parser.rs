@@ -222,7 +222,7 @@ fn extract_references(
             let text = capture.node.utf8_text(source).unwrap_or("");
 
             match capture_name.as_ref() {
-                "name" | "module" | "source" | "superclass" | "interface" | "trait" => {
+                "name" | "module" | "source" | "path" | "superclass" | "interface" | "trait" => {
                     name = Some(text.to_string());
                     line = Some(capture.node.start_position().row as u32 + 1);
                 }
@@ -298,6 +298,34 @@ mod tests {
         let class_sym = result.symbols.iter().find(|s| s.name == "Foo");
         assert!(class_sym.is_some());
         assert_eq!(class_sym.unwrap().kind, SymbolKind::Class);
+    }
+
+    #[test]
+    fn test_parse_go_function_and_imports() {
+        let source = b"package main\n\nimport \"fmt\"\n\nfunc Hello() {\n\tfmt.Println(\"hi\")\n}\n\ntype Server struct {\n\tPort int\n}\n\nfunc (s *Server) Start() {\n\tfmt.Println(\"starting\")\n}";
+        let config = LANGUAGE_REGISTRY.get("go").unwrap();
+
+        let result = parse_file(Path::new("test.go"), source, config).unwrap();
+
+        // Symbols: Hello (function), Server (struct), Start (method)
+        let func = result.symbols.iter().find(|s| s.name == "Hello");
+        assert!(func.is_some(), "Should find Hello function");
+        assert_eq!(func.unwrap().kind, SymbolKind::Function);
+
+        let strct = result.symbols.iter().find(|s| s.name == "Server");
+        assert!(strct.is_some(), "Should find Server struct");
+        assert_eq!(strct.unwrap().kind, SymbolKind::Struct);
+
+        let method = result.symbols.iter().find(|s| s.name == "Start");
+        assert!(method.is_some(), "Should find Start method");
+        assert_eq!(method.unwrap().kind, SymbolKind::Method);
+
+        // References: import "fmt", calls to Println
+        let imports: Vec<_> = result.references.iter().filter(|r| r.kind == ReferenceKind::Import).collect();
+        assert!(!imports.is_empty(), "Should find Go imports");
+
+        let calls: Vec<_> = result.references.iter().filter(|r| r.kind == ReferenceKind::Call).collect();
+        assert!(!calls.is_empty(), "Should find Go method calls");
     }
 
     #[test]

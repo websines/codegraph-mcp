@@ -3,14 +3,11 @@
 ;; Function declarations
 (function_declaration
   name: (identifier) @name
-  parameters: (parameter_list) @params
 ) @function
 
 ;; Method declarations
 (method_declaration
   name: (field_identifier) @name
-  parameters: (parameter_list) @params
-  receiver: (parameter_list) @receiver
 ) @method
 
 ;; Type declarations (structs, interfaces)
