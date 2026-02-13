@@ -86,9 +86,15 @@ record_attempt         → Log your plan BEFORE executing (returns solution_id)
 | `search_symbols` | Find symbols by name |
 | `get_neighbors` | Find callers/callees/imports with depth |
 | `get_file_symbols` | File structure overview |
+| `get_file_symbols` + `include_source=true` | Read actual source code of symbols |
 | `infer_cross_edges` | Detect frontend→backend API connections |
 | `get_api_connections` | Get API connections for a file |
 | `index_project` | After external file changes |
+
+**Graph tool tips:**
+- All graph tools default to compact output (saves ~70% tokens)
+- Use `compact=false` when you need full signatures or symbol IDs (e.g., before `get_neighbors`)
+- Use `include_source=true` on `get_file_symbols` to read code bodies without a separate file read
 
 ### Skill & Sync
 | Tool | When |

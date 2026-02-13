@@ -32,6 +32,8 @@ Use **Codegraph** code graph tools for:
 - Cross-language API tracing → `infer_cross_edges`, `get_api_connections`
 - Multi-hop relationship queries → `get_neighbors` with depth > 1
 - Quick file overviews → `get_file_symbols`
+- Reading symbol source code → `get_file_symbols` with `include_source=true`
+- Full signatures/IDs when needed → pass `compact=false` to any graph tool
 
 ## STATE TRACKING (CONTINUOUS)
 

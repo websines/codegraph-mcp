@@ -35,6 +35,15 @@ pub struct ToolRegistry {
     ctx: Arc<ToolContext>,
 }
 
+/// Truncate a signature to a maximum length with ellipsis
+fn truncate_sig(sig: &str, max: usize) -> String {
+    if sig.len() <= max {
+        sig.to_string()
+    } else {
+        format!("{}...", &sig[..max])
+    }
+}
+
 impl ToolRegistry {
     pub fn new(ctx: Arc<ToolContext>) -> Self {
         Self { ctx }
@@ -62,7 +71,8 @@ impl ToolRegistry {
                         "query": { "type": "string", "description": "Symbol name (partial match)" },
                         "kind": { "type": "string", "enum": ["function", "method", "class", "struct", "interface", "trait", "type", "variable", "const", "static", "module", "enum", "impl"] },
                         "file_pattern": { "type": "string", "description": "Filter by file path substring" },
-                        "limit": { "type": "integer", "default": 10, "maximum": 50 }
+                        "limit": { "type": "integer", "default": 10, "maximum": 50 },
+                        "compact": { "type": "boolean", "default": true, "description": "Compact output (no signatures/IDs)" }
                     },
                     "required": ["query"]
                 }),
@@ -73,7 +83,9 @@ impl ToolRegistry {
                 input_schema: json!({
                     "type": "object",
                     "properties": {
-                        "path": { "type": "string", "description": "File path relative to project root" }
+                        "path": { "type": "string", "description": "File path relative to project root" },
+                        "compact": { "type": "boolean", "default": true, "description": "Compact output (no signatures)" },
+                        "include_source": { "type": "boolean", "default": false, "description": "Include source code bodies from disk" }
                     },
                     "required": ["path"]
                 }),
@@ -87,7 +99,8 @@ impl ToolRegistry {
                         "id": { "type": "string", "description": "Symbol ID from search_symbols" },
                         "depth": { "type": "integer", "default": 1, "minimum": 1, "maximum": 3 },
                         "direction": { "type": "string", "enum": ["outgoing", "incoming", "both"], "default": "both" },
-                        "edge_types": { "type": "array", "items": { "type": "string" }, "description": "Filter by edge type: calls, imports, inherits, etc." }
+                        "edge_types": { "type": "array", "items": { "type": "string" }, "description": "Filter by edge type: calls, imports, inherits, etc." },
+                        "compact": { "type": "boolean", "default": true, "description": "Compact output (no IDs, short edge paths)" }
                     },
                     "required": ["id"]
                 }),
@@ -490,6 +503,7 @@ impl ToolRegistry {
             .get("limit")
             .and_then(|v| v.as_u64())
             .unwrap_or(10) as usize;
+        let compact = args.get("compact").and_then(|v| v.as_bool()).unwrap_or(true);
 
         let graph = self.ctx.graph.read().map_err(|e| anyhow::anyhow!("Graph lock poisoned: {}", e))?;
         let results = graph.search(query, kind, file_pattern, limit);
@@ -506,10 +520,14 @@ impl ToolRegistry {
             let sig = node.data.get("signature").and_then(|v| v.as_str()).unwrap_or("");
             let kind_str = &node.kind;
 
-            output.push_str(&format!(
-                "[{}] {} ({}:{})\n  {}\n  id: {}\n\n",
-                kind_str, name, file, line, sig, node.id
-            ));
+            if compact {
+                output.push_str(&format!("{} ({}:{}) [{}]\n", name, file, line, kind_str));
+            } else {
+                output.push_str(&format!(
+                    "[{}] {} ({}:{})\n  {}\n  id: {}\n\n",
+                    kind_str, name, file, line, truncate_sig(sig, 80), node.id
+                ));
+            }
         }
 
         Ok(ToolResult::text(output.trim_end()))
@@ -525,6 +543,9 @@ impl ToolRegistry {
             return Ok(ToolResult::error("Missing required parameter: path"));
         }
 
+        let compact = args.get("compact").and_then(|v| v.as_bool()).unwrap_or(true);
+        let include_source = args.get("include_source").and_then(|v| v.as_bool()).unwrap_or(false);
+
         let graph = self.ctx.graph.read().map_err(|e| anyhow::anyhow!("Graph lock poisoned: {}", e))?;
         let symbols = graph.file_symbols(path);
 
@@ -535,6 +556,15 @@ impl ToolRegistry {
             )));
         }
 
+        // Read file content once if source is requested
+        let file_content = if include_source {
+            let full_path = self.ctx.config.project_root.join(path);
+            std::fs::read_to_string(&full_path).ok()
+        } else {
+            None
+        };
+        let file_lines: Vec<&str> = file_content.as_deref().map(|c| c.lines().collect()).unwrap_or_default();
+
         let mut output = format!("## {}\n\n", path);
         for node in &symbols {
             let name = node.data.get("name").and_then(|v| v.as_str()).unwrap_or("?");
@@ -542,10 +572,26 @@ impl ToolRegistry {
             let line_end = node.data.get("line_end").and_then(|v| v.as_u64()).unwrap_or(0);
             let sig = node.data.get("signature").and_then(|v| v.as_str()).unwrap_or("");
 
-            output.push_str(&format!(
-                "L{}-{} [{}] {}\n  {}\n",
-                line_start, line_end, node.kind, name, sig
-            ));
+            if compact {
+                output.push_str(&format!("L{} [{}] {}\n", line_start, node.kind, name));
+            } else {
+                output.push_str(&format!(
+                    "L{}-{} [{}] {}\n  {}\n",
+                    line_start, line_end, node.kind, name, truncate_sig(sig, 80)
+                ));
+            }
+
+            // Append source if requested
+            if include_source && !file_lines.is_empty() {
+                let start = (line_start as usize).saturating_sub(1);
+                let end = (line_end as usize).min(file_lines.len());
+                if start < end {
+                    let source_lines: Vec<&str> = file_lines[start..end].iter().copied().take(100).collect();
+                    output.push_str("```\n");
+                    output.push_str(&source_lines.join("\n"));
+                    output.push_str("\n```\n");
+                }
+            }
         }
 
         Ok(ToolResult::text(output.trim_end()))
@@ -585,6 +631,8 @@ impl ToolRegistry {
             .as_ref()
             .map(|v| v.iter().map(|s| s.as_str()).collect());
 
+        let compact = args.get("compact").and_then(|v| v.as_bool()).unwrap_or(true);
+
         let graph = self.ctx.graph.read().map_err(|e| anyhow::anyhow!("Graph lock poisoned: {}", e))?;
         let neighbors = graph.neighbors(id, depth, direction, edge_refs.as_deref());
 
@@ -599,12 +647,20 @@ impl ToolRegistry {
         for neighbor in &neighbors {
             let name = neighbor.node.data.get("name").and_then(|v| v.as_str()).unwrap_or("?");
             let file = neighbor.node.data.get("file").and_then(|v| v.as_str()).unwrap_or("?");
+            let line = neighbor.node.data.get("line_start").and_then(|v| v.as_u64()).unwrap_or(0);
             let path_str = neighbor.path.join(" → ");
 
-            output.push_str(&format!(
-                "[{}] {} ({})\n  via: {}\n  distance: {}\n  id: {}\n\n",
-                neighbor.node.kind, name, file, path_str, neighbor.distance, neighbor.node.id
-            ));
+            if compact {
+                output.push_str(&format!(
+                    "{} ({}:{}) [{}] ←{}\n",
+                    name, file, line, neighbor.node.kind, path_str
+                ));
+            } else {
+                output.push_str(&format!(
+                    "[{}] {} ({})\n  via: {}\n  distance: {}\n  id: {}\n\n",
+                    neighbor.node.kind, name, file, path_str, neighbor.distance, neighbor.node.id
+                ));
+            }
         }
 
         Ok(ToolResult::text(output.trim_end()))
