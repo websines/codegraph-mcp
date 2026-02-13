@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "synced_at": "2026-02-13T20:55:13.338388+00:00",
+  "patterns": [
+    {
+      "id": "b8dc2217-8463-4d74-b45a-c3d947a8152c",
+      "intent": "Integrate RTK-style token compression natively into a Rust MCP server",
+      "mechanism": "Create a compress module with submodules for different command types (git, files, search, test_output), auto-detect command type in bash wrapper, track analytics with tokio::sync::Mutex",
+      "examples": [
+        "Create src/compress/mod.rs with CompressConfig, CompressResult, deduplicate_lines(), truncate_with_summary()",
+        "Add submodules: files.rs (ls/tree/find), git.rs (status/diff/log/blame), search.rs (grep), test_output.rs (cargo test/jest/pytest), bash.rs (command detection + execution), analytics.rs (token tracking)",
+        "Add compression_analytics: Mutex<CompressionAnalytics> to ToolContext",
+        "Register bash_compressed and compression_stats tools in tools.rs"
+      ],
+      "scope": {
+        "exclude_paths": [],
+        "include_paths": [
+          "src/compress/**",
+          "src/mcp/tools.rs"
+        ],
+        "symbols": [],
+        "tags": [
+          "compression",
+          "tokens",
+          "rtk",
+          "bash",
+          "mcp"
+        ]
+      },
+      "confidence": 0.85,
+      "effective_confidence": 0.85,
+      "usage_count": 0,
+      "success_count": 0
+    }
+  ]
+}

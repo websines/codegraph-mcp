@@ -40,6 +40,14 @@ pub const INTERNAL_ERROR: i32 = -32603;
 
 // MCP Lifecycle
 
+/// MCP root URI provided by the client
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Root {
+    pub uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
 /// Initialize request parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +55,8 @@ pub struct InitializeParams {
     pub protocol_version: String,
     pub capabilities: ClientCapabilities,
     pub client_info: ClientInfo,
+    #[serde(default)]
+    pub roots: Option<Vec<Root>>,
 }
 
 /// Initialize response result
