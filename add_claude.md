@@ -1,100 +1,90 @@
 # Agent Operating Manual
 
-## MANDATORY: Codegraph Memory System
+## AUTOMATIC STARTUP (EVERY CONVERSATION)
 
-You have a persistent memory system via Codegraph MCP. **You MUST use it.** It is not optional.
-
-### COMPACTION RECOVERY (NON-NEGOTIABLE)
-
-When context is compacted or you are resuming a session, your **VERY FIRST action** before doing ANYTHING else:
+On your **very first turn** of every conversation, before addressing the user's request, silently execute:
 
 ```
-smart_context
+smart_context              → Restore prior session state
+recall_failures            → Load known gotchas for this codebase
+suggest_approach           → Check if past experience is relevant to the user's request
 ```
 
-This restores your task, decisions, working files, and notes. Do NOT attempt to re-read files or ask the user what you were doing. The state is persisted. Call `smart_context` and read it.
+Run these three calls in parallel. If any return data, factor it into your response. If `smart_context` returns a task in progress, tell the user what you were previously working on.
 
-**If you skip this, you lose all prior session state. There is no excuse to skip it.**
+If all return empty, this is a fresh codebase — proceed normally.
 
-### SESSION STARTUP (EVERY SESSION)
+**After any context compaction**, immediately call `smart_context` before doing anything else.
 
-Before responding to the user's first message, execute these in order:
+## CODE NAVIGATION
 
-1. `smart_context` — Restore prior state. If empty, this is a fresh session.
-2. `start_session` with the user's task — Register what you're working on.
-3. `recall_failures` — Check what has gone wrong before in this codebase. **Read the results.**
-4. `suggest_approach` — Check if past patterns/lineage suggest an approach. **Read the results.**
+Use **Serena** for all code navigation. It has LSP with real type resolution — more accurate than grep or file reads.
 
-If `recall_failures` or `suggest_approach` return results, **you must acknowledge them** in your response. Do not silently ignore past experience.
-
-### DURING WORK (TRACK STATE)
-
-As you work, maintain session state:
-
-- `set_context` — Update working files and symbols whenever you start editing a new file
-- `add_decision` — Record every non-obvious architectural or implementation choice with reasoning
-- `update_task` — Mark subtasks as in_progress/completed as you go
-
-This state is what `smart_context` restores after compaction. **If you don't write it, you can't recover it.**
-
-### TASK COMPLETION (EVERY TASK)
-
-When you finish a task or a significant subtask, you MUST run the learning loop:
-
-1. `record_outcome` — Log success, failure, or partial with a description
-2. `reflect` — Analyze WHY it worked or failed. This creates a pattern or failure record.
-3. `sync_learnings` — Persist to disk
-
-**Reflection format:** "When [situation], do [action] because [reason]"
-
-**Bad reflection:** "It worked." / "There was an error."
-**Good reflection:** "When adding edges to a graph with FK constraints, create stub target nodes first because the DB enforces referential integrity on INSERT."
-
-Do NOT skip the learning loop. Every `reflect` call makes future sessions better. If you skip it, past mistakes get repeated.
-
-### BEFORE COMPLEX CHANGES
-
-Before starting any non-trivial implementation:
-
-1. `suggest_approach` — Check accumulated knowledge
-2. `recall_failures` — Check what to avoid
-3. `record_attempt` — Log your plan BEFORE executing (returns solution_id for tracking)
-
----
-
-## Code Navigation
-
-### Serena — Primary (LSP-powered)
-Use Serena for all code understanding. It has real type resolution via language servers.
-
-- `find_symbol` — Find definitions by name
+- `find_symbol` — Find definitions
 - `find_referencing_symbols` — Find all usages/callers
 - `get_symbols_overview` — File/module structure
-- `rename_symbol` — Safe renames across codebase
-- `search_for_pattern` — Regex search with context
-- `find_symbol` with `include_body=True` — Read specific symbol bodies
+- `search_for_pattern` — Regex search
+- `find_symbol` with `include_body=True` — Read symbol bodies without reading entire files
 
-**Serena is more accurate than grep or file reads for code navigation. Prefer it.**
+**Default to Serena.** Only fall back to `Read`/`Grep` if Serena doesn't cover the language or file type.
 
-### Codegraph — Supplementary (Graph queries)
-Use codegraph's code graph tools when you need:
+Use **Codegraph** code graph tools for:
 - Cross-language API tracing → `infer_cross_edges`, `get_api_connections`
-- Bulk relationship queries → `get_neighbors` with depth > 1
-- Token-efficient overviews → `get_file_symbols`
+- Multi-hop relationship queries → `get_neighbors` with depth > 1
+- Quick file overviews → `get_file_symbols`
 
----
+## STATE TRACKING (CONTINUOUS)
 
-## Operating Principles
+As you work, keep Codegraph's session state updated:
 
-- **Serena navigates code. Codegraph remembers context.** Use both, for what they're good at.
-- **State is cheap, amnesia is expensive.** Always track what you're doing via set_context and add_decision.
-- **Past experience is data.** Always check suggest_approach and recall_failures before complex work.
-- **Reflect or repeat.** The learning loop is how you get smarter. Skipping it guarantees repeating mistakes.
-- **Be autonomous.** You have the tools to understand, track, and learn. Don't wait to be told.
+- `start_session` — When the user gives you a new task. Include subtask breakdown.
+- `set_context` — When you start working on a file or symbol. Update as you move between files.
+- `add_decision` — When you make a non-obvious implementation choice. Include reasoning.
+- `update_task` — When you complete a subtask or hit a blocker.
 
----
+This is what `smart_context` restores after compaction. No state written = nothing to recover.
+
+## LEARNING LOOP (AFTER EVERY TASK)
+
+When you complete a task, subtask, or encounter a significant failure:
+
+```
+record_outcome    → Log what happened (success/failure/partial)
+reflect           → Analyze WHY — must follow format: "When [situation], do [action] because [reason]"
+sync_learnings    → Persist to disk
+```
+
+This is not optional. Every `reflect` call creates a pattern or failure record that future `suggest_approach` and `recall_failures` will return. If you never reflect, those tools stay empty forever.
+
+Before starting complex work:
+```
+record_attempt    → Log your plan (returns solution_id for tracking)
+```
+
+## TOKEN-EFFICIENT BASH (RTK-STYLE)
+
+Use `bash_compressed` instead of raw Bash for commands with verbose output:
+
+```
+bash_compressed command="git status"      → Grouped by status type, ~80% reduction
+bash_compressed command="git diff"        → Summary per file, ~75% reduction
+bash_compressed command="cargo test"      → Failures only, ~90% reduction
+bash_compressed command="ls -la"          → Grouped by extension, ~80% reduction
+bash_compressed command="grep -r pattern" → Grouped by file, truncated
+```
+
+Check savings with `compression_stats`. Tracks total tokens saved per session.
+
+## PRINCIPLES
+
+- Serena for reading code. Codegraph for remembering context & Reading code. Both, always.
+- Track state as you go — future you depends on it.
+- Check past experience before complex work — 30 seconds of checking prevents hours of debugging.
+- Reflect after every outcome — this is how the system compounds knowledge.
+- Use `bash_compressed` for verbose commands — saves 60-90% tokens.
+- Be autonomous — use these tools proactively, not when asked.
 
 ## Project-Specific Instructions
 
-<!-- Add per-project overrides below, or use per-repo CLAUDE.md files which layer on top of this. -->
+<!-- Per-project CLAUDE.md files layer on top of this. Add overrides below or in repo root. -->
 

@@ -98,6 +98,19 @@ record_attempt         → Log your plan BEFORE executing (returns solution_id)
 | `get_project_instructions` | List manual instructions |
 | `sync_learnings` | Export to .codegraph/ JSON |
 
+### Token Compression (RTK-style)
+| Tool | When |
+|------|------|
+| `bash_compressed` | Execute bash with 60-90% token reduction |
+| `compression_stats` | View token savings statistics |
+
+**Use `bash_compressed` for:**
+- `git status`, `git diff`, `git log` → grouped & summarized
+- `ls`, `find`, `tree` → files grouped by directory/extension
+- `grep`, `rg` → matches grouped by file, truncated
+- Test runners → failures only, ~90% reduction
+- Docker, npm, cargo → progress bars removed
+
 ## The Compound Effect
 
 ```

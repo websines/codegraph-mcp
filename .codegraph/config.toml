@@ -1,0 +1,31 @@
+# Codegraph configuration
+# See https://github.com/anthropics/codegraph-mcp for documentation
+
+[indexing]
+# Directories to exclude from indexing (matched as exact path components)
+exclude = [
+    "node_modules",
+    "target",
+    ".git",
+    "dist",
+    "build",
+    "__pycache__",
+    ".cache",
+    ".pytest_cache",
+    "coverage",
+    ".codegraph",
+    ".venv",
+    "venv",
+    ".tox",
+]
+
+# Maximum file size in bytes (files larger than this are skipped)
+max_file_size = 1048576  # 1 MiB
+
+[learning]
+# Half-life for confidence decay in days
+decay_half_life = 90
+
+[cross_language]
+# Enable cross-language API inference
+enabled = true

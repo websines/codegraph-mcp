@@ -1,4 +1,5 @@
 pub mod code;
+pub mod compress;
 pub mod config;
 pub mod learning;
 pub mod mcp;

@@ -50,6 +50,7 @@ impl Server {
             niche_store,
             manual_instruction_store,
             cross_language_inferrer,
+            compression_analytics: tokio::sync::Mutex::new(crate::compress::CompressionAnalytics::new()),
         });
 
         Self {

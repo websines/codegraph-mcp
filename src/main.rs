@@ -1,4 +1,5 @@
 mod code;
+mod compress;
 mod config;
 mod learning;
 mod mcp;

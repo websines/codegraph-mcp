@@ -1,9 +1,11 @@
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::sync::{Arc, RwLock};
+use tokio::sync::Mutex;
 
 use super::protocol::{Tool, ToolResult};
 use crate::code::{CrossLanguageInferrer, Indexer};
+use crate::compress::{CompressionAnalytics, CompressConfig};
 use crate::config::Config;
 use crate::learning::failures::FailureStore;
 use crate::learning::lineage::LineageStore;
@@ -26,6 +28,7 @@ pub struct ToolContext {
     pub niche_store: Arc<NicheStore>,
     pub manual_instruction_store: Arc<ManualInstructionStore>,
     pub cross_language_inferrer: Arc<CrossLanguageInferrer>,
+    pub compression_analytics: Mutex<CompressionAnalytics>,
 }
 
 pub struct ToolRegistry {
@@ -371,6 +374,30 @@ impl ToolRegistry {
                     }
                 }),
             },
+            // RTK-style compression tools
+            Tool {
+                name: "bash_compressed".into(),
+                description: "Execute a bash command with RTK-style output compression. Saves 60-90% tokens on git, ls, grep, test output.".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string", "description": "The bash command to execute" },
+                        "max_lines": { "type": "integer", "default": 50, "description": "Max lines before truncating" },
+                        "max_items_per_group": { "type": "integer", "default": 10, "description": "Max items per category" }
+                    },
+                    "required": ["command"]
+                }),
+            },
+            Tool {
+                name: "compression_stats".into(),
+                description: "Get token compression statistics. Shows total savings, by-category breakdown.".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "reset": { "type": "boolean", "default": false, "description": "Reset statistics after returning" }
+                    }
+                }),
+            },
         ]
     }
 
@@ -402,6 +429,8 @@ impl ToolRegistry {
             "infer_cross_edges" => self.handle_infer_cross_edges(args).await,
             "get_api_connections" => self.handle_get_api_connections(args).await,
             "sync_learnings" => self.handle_sync_learnings(args).await,
+            "bash_compressed" => self.handle_bash_compressed(args).await,
+            "compression_stats" => self.handle_compression_stats(args).await,
             _ => Ok(ToolResult::error(format!("Tool not found: {}", name))),
         }
     }
@@ -1387,6 +1416,64 @@ impl ToolRegistry {
 
         Ok(ToolResult::text(output.trim_end()))
     }
+
+    // === RTK-style Compression Tools ===
+
+    async fn handle_bash_compressed(&self, args: Value) -> Result<ToolResult> {
+        let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+        if command.is_empty() {
+            return Ok(ToolResult::error("Missing required parameter: command"));
+        }
+
+        let max_lines = args.get("max_lines").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+        let max_items = args.get("max_items_per_group").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+
+        let config = CompressConfig {
+            max_lines,
+            max_items_per_group: max_items,
+            ..Default::default()
+        };
+
+        let result = crate::compress::exec_compressed(command, &config);
+
+        match result {
+            Ok(compressed) => {
+                // Track analytics
+                let category = crate::compress::categorize_command(command);
+                let original_tokens = compressed.original_size / 4;
+                let compressed_tokens = compressed.compressed_size / 4;
+
+                {
+                    let mut analytics = self.ctx.compression_analytics.lock().await;
+                    analytics.record(category, original_tokens, compressed_tokens);
+                }
+
+                let reduction = compressed.reduction_percent();
+                let header = if reduction > 10.0 {
+                    format!("📦 Compressed ({:.0}% reduction, ~{} tokens saved)\n\n", reduction, compressed.estimated_token_savings)
+                } else {
+                    String::new()
+                };
+
+                Ok(ToolResult::text(format!("{}{}", header, compressed.output)))
+            }
+            Err(e) => Ok(ToolResult::error(e)),
+        }
+    }
+
+    async fn handle_compression_stats(&self, args: Value) -> Result<ToolResult> {
+        let reset = args.get("reset").and_then(|v| v.as_bool()).unwrap_or(false);
+
+        let mut analytics = self.ctx.compression_analytics.lock().await;
+        let report = analytics.format_report();
+        let stats_json = analytics.to_json();
+
+        if reset {
+            analytics.reset();
+        }
+
+        Ok(ToolResult::text(format!("{}\n\nJSON:\n{}", report, serde_json::to_string_pretty(&stats_json)?)))
+    }
 }
 
 fn parse_task_status(s: &str) -> crate::session::TaskStatus {
@@ -1459,6 +1546,7 @@ mod tests {
             niche_store,
             manual_instruction_store,
             cross_language_inferrer,
+            compression_analytics: tokio::sync::Mutex::new(crate::compress::CompressionAnalytics::new()),
         });
 
         (ctx, temp_dir)
