@@ -61,8 +61,8 @@ impl Scope {
             }
         }
 
-        // Check symbol matching (if scope has symbol requirements)
-        if !self.symbols.is_empty() {
+        // Check symbol matching (only when BOTH scope and query have symbols)
+        if !self.symbols.is_empty() && !symbols.is_empty() {
             let matches_symbol = self.symbols.iter().any(|pattern| {
                 symbols
                     .iter()
@@ -73,8 +73,8 @@ impl Scope {
             }
         }
 
-        // Check tag intersection (if scope has tag requirements)
-        if !self.tags.is_empty() {
+        // Check tag intersection (only when BOTH scope and query have tags)
+        if !self.tags.is_empty() && !tags.is_empty() {
             let has_common_tag = self.tags.iter().any(|t| tags.contains(t));
             if !has_common_tag {
                 return false;
