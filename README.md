@@ -1,312 +1,110 @@
 # Codegraph MCP
 
-A Rust MCP server that gives Claude Code a persistent code graph, session memory, and learning system — so it navigates codebases via structure instead of grep/read, and remembers context across compaction.
+A self-use Rust MCP server that gives AI coding agents persistent code understanding and memory across sessions. Built as a personal tool to explore what happens when you give an LLM structured access to a codebase's symbol graph, session state, and accumulated project knowledge.
 
-## Why
+## What It Does
 
-Claude Code spends **~92% of navigation tokens** on grep + file reads. On a 183k LOC project, a typical session burns ~150,000 tokens just figuring out what calls what and where things are defined. Codegraph replaces that with structured graph queries that return the same information in ~600 tokens.
+Codegraph runs as an [MCP server](https://modelcontextprotocol.io/) (stdio transport) and exposes 26 tools that an AI agent can call:
 
-It also solves context compaction amnesia: when Claude's context window fills up and gets compressed, all working state (task progress, architectural decisions, which files you're editing) is lost. Codegraph persists all of this in SQLite and restores it in ~125 tokens via `smart_context`.
+- **Code Graph** — Parses source code with tree-sitter (Rust, TypeScript, JavaScript, Python, Go), extracts symbols and their relationships (calls, imports, inherits), and stores them as a directed graph. The agent can search symbols, traverse dependencies, and understand file structure without reading entire files.
 
-## Features
+- **Session Memory** — Tracks the agent's current task, subtasks, decisions, and working context. Survives context window compaction so the agent can resume where it left off.
 
-### Code Graph (Phases 0-2)
-- **Multi-language parsing** via tree-sitter: Rust, TypeScript, JavaScript, Python, Go
-- **Incremental indexing** with mtime + xxh3 content hash (only re-parses changed files)
-- **Symbol extraction**: functions, classes, structs, enums, traits, interfaces, methods, variables
-- **Relationship tracking**: calls, imports, inherits, implements
-- **Cross-file resolution**: post-index pass resolves `unresolved::X` stubs to real `file.py::X` nodes (47% resolution rate on 183k LOC project)
-- **In-memory graph** (petgraph) for fast BFS neighbor traversal
-- **Persistent storage** in libSQL (SQLite)
+- **Learning System** — Records patterns (things that worked), failures (gotchas to avoid), and solution lineage (attempt chains with outcomes). A reflection engine converts outcomes into reusable knowledge. A suggestion system combines all three to recommend approaches for new tasks.
 
-### Session Memory (Phase 3)
-- **Task tracking** with subtasks, status, and blockers
-- **Decision log** with reasoning and symbol links
-- **Working context** tracking (files, symbols, notes)
-- **Smart context** — one-call full state restoration after compaction (~125 tokens)
+- **Skill Distillation** — Generates a `SKILL.md` from accumulated patterns, failures, and conventions — a machine-readable summary of project-specific knowledge.
 
-### Learning System (Phases 4-5)
-- **Pattern memory** — record successful patterns with examples, scoped by file/tag
-- **Failure memory** — track gotchas with avoidance rules and severity
-- **Confidence scoring** — time decay (90-day half-life), drift detection, usage momentum
-- **Solution lineage** — track attempts with parent-child retry chains
-- **Reflection engine** — convert solution outcomes into patterns/failures
-- **Suggestion system** — combines patterns + failures + lineage for recommendations
+- **Cross-Language Inference** — Detects REST/GraphQL calls in frontend code and matches them to backend route definitions.
 
-### Behavioral Niches (Phase 6)
-- **Niche clustering** — solutions assigned to niches based on feature vectors (performance, readability, maintainability)
-- **Best solution tracking** — each niche tracks its highest-scoring solution
+- **Bash Compression** — Compresses verbose command output (git status, test results, directory listings) to reduce token usage.
 
-### Skill Distillation (Phase 7)
-- **SKILL.md generation** — distill patterns, failures, and conventions into a project skill file
-- **Manual instructions** — add project-specific guidance by category (architecture, testing, style, etc.)
-- **Convention clustering** — automatically group related patterns into navigational conventions
+## Tech Stack
 
-### Cross-Language Inference (Phase 8)
-- **API matching** — detect REST/GraphQL calls in frontend code and match to backend routes
-- **Confidence scoring** — connections scored by match quality
-- **Path normalization** — handles `:id`, `${id}`, `{id}` style parameter formats
-
-### Sync & Persistence (Phase 9)
-- **JSON export** — sync patterns and failures to `.codegraph/` JSON files
-- **Confidence-filtered** — only exports high-confidence patterns
-
-### Config & Polish (Phase 10)
-- **config.toml** — customizable exclude patterns, file size limits, learning decay, cross-language toggle
-- **.codegraph/ auto-init** — creates directory with config.toml + .gitignore on first run
-- **Error handling** — proper error propagation (no unwrap panics in production paths)
-- **Integration tests** — full lifecycle tests for MCP, indexing, learning, and session systems
-- **Benchmarks** — criterion benchmarks for graph search, neighbors, and smart_context
-
-## Installation
-
-### Prerequisites
-
-- [Rust toolchain](https://rustup.rs/) (1.70+)
-
-### 1. Clone and Build
-
-```bash
-git clone https://github.com/anthropics/codegraph-mcp.git
-cd codegraph-mcp
-cargo build --release
-```
-
-The binary will be at `target/release/codegraph`.
-
-### 2. Install as MCP Server
-
-Add to your Claude Code MCP config at `~/.claude.json` (or `~/.claude/config.json`):
-
-```json
-{
-  "mcpServers": {
-    "codegraph": {
-      "command": "/absolute/path/to/codegraph-mcp/target/release/codegraph"
-    }
-  }
-}
-```
-
-Replace `/absolute/path/to/codegraph-mcp` with the actual path where you cloned the repo.
-
-For project-specific config, add to `.claude/config.json` in your project root instead:
-
-```json
-{
-  "mcpServers": {
-    "codegraph": {
-      "command": "/absolute/path/to/codegraph-mcp/target/release/codegraph"
-    }
-  }
-}
-```
-
-### 3. Install the Skill (Optional but Recommended)
-
-The skill file teaches Claude how to use Codegraph effectively. Copy it to your global Claude skills:
-
-```bash
-mkdir -p ~/.claude/skills
-cp resources/skill-global.md ~/.claude/skills/codegraph.md
-```
-
-This makes Claude automatically use the code graph for navigation, maintain session state across compaction, and build up project knowledge through the learning loop.
-
-### 4. Verify Installation
-
-Start Claude Code in any git project and you should see Codegraph's 26 tools available. Test with:
-
-```
-search_symbols(query: "main")
-```
-
-If you see "No symbols found", run `index_project(full: true)` first.
-
-### How It Detects Your Project
-
-The server auto-detects the project root by walking up from the current directory looking for:
-1. `.codegraph/` directory (highest priority)
-2. `.git/` directory
-
-### First Run
-
-On first run, Codegraph creates `.codegraph/` with:
-- `config.toml` — default settings (customize exclude patterns, file size limits, etc.)
-- `.gitignore` — excludes SQLite databases, allows config.toml for team sharing
-
-After starting Claude Code, run:
-```
-index_project(full: true)
-```
-
-Subsequent sessions only need `index_project()` (incremental) or nothing if files haven't changed.
-
-### Configuration
-
-Edit `.codegraph/config.toml` to customize behavior:
-
-```toml
-[indexing]
-exclude = ["node_modules", "target", ".git", "dist", "build", "__pycache__"]
-max_file_size = 1048576  # 1 MiB
-
-[learning]
-decay_half_life = 90  # days
-
-[cross_language]
-enabled = true
-```
-
-### Uninstall
-
-Remove the `codegraph` entry from your MCP config and optionally delete the binary:
-
-```bash
-rm -rf /path/to/codegraph-mcp  # Remove the repo
-rm -rf ~/.cache/codegraph       # Remove cached databases
-# Remove .codegraph/ from individual projects if desired
-```
-
-## MCP Tools (26)
-
-### Code Graph
-
-| Tool | Description |
-|---|---|
-| `index_project` | Rebuild code graph. `full: true` forces complete rebuild. |
-| `search_symbols` | Find symbols by name (partial match), filter by kind/file. |
-| `get_file_symbols` | List all symbols in a file with signatures and line numbers. |
-| `get_neighbors` | Get callers/callees/imports connected to a symbol. Supports direction and depth. |
-
-### Session
-
-| Tool | Description |
-|---|---|
-| `start_session` | Start a task with optional subtask breakdown. |
-| `get_session` | Load current session state. |
-| `update_task` | Update subtask status, add items, manage blockers. |
-| `add_decision` | Record a decision with reasoning and related symbols. |
-| `set_context` | Track working files, symbols, and notes. |
-| `smart_context` | One-shot context restoration. Call on startup and after compaction. |
-
-### Learning
-
-| Tool | Description |
-|---|---|
-| `recall_patterns` | Query relevant patterns for current task. |
-| `recall_failures` | Get failures to avoid (always includes critical). |
-| `extract_pattern` | Record a successful pattern with examples. |
-| `record_failure` | Record a gotcha with avoidance rule. |
-| `record_attempt` | Start tracking a solution attempt. |
-| `record_outcome` | Record success/failure/partial outcome. |
-| `reflect` | Convert a solution into pattern or failure record. |
-| `query_lineage` | Find past solution attempts for a task. |
-| `suggest_approach` | Get recommendations from patterns + failures + lineage. |
-
-### Niches, Skills, Cross-Language, Sync
-
-| Tool | Description |
-|---|---|
-| `list_niches` | List behavioral niches with their best solutions. |
-| `distill_project_skill` | Generate SKILL.md from patterns, failures, and conventions. |
-| `add_instruction` | Add a manual project instruction by category. |
-| `get_project_instructions` | List all manual project instructions. |
-| `infer_cross_edges` | Infer frontend→backend API connections. |
-| `get_api_connections` | Get API connections for a specific file. |
-| `sync_learnings` | Export patterns/failures to .codegraph/ JSON files. |
-
-## Benchmarks
-
-Real-world benchmarks on brain-test (183k LOC, 379 files, Python/Rust/TypeScript):
-
-### Indexing
-- **Index time**: 31.5s (full), incremental is near-instant for unchanged files
-- **Symbols**: 16,553 extracted
-- **Edges**: 39,497 relationships
-- **Cross-file resolution**: 793/1,673 stubs resolved (47%)
-- **DB size**: 19 MB
-
-### Graph Operations (criterion, 10k node graph)
-
-| Operation | Time |
-|---|---|
-| `search_symbols` | ~598 µs |
-| `search_by_kind` | ~381 µs |
-| `search_by_file` | ~282 µs |
-| `neighbors_depth1` | ~7.3 µs |
-| `neighbors_depth2` | ~13.6 µs |
-| `neighbors_outgoing` | ~2.6 µs |
-| `file_symbols` | ~63.9 µs |
-| `smart_context` | ~10.8 ms |
-
-### Token Savings
-
-| Query | grep/read | codegraph | Savings |
-|---|---|---|---|
-| "Who uses Diagnosis?" | ~8,000 tokens | ~600 tokens | **92%** |
-| "What does bootstrap() call?" | ~8,400 tokens | ~500 tokens | **94%** |
-| "What's in diagnosis.py?" | ~14,500 tokens | ~875 tokens | **94%** |
-| "Resume after compaction" | ~20,000 tokens | ~125 tokens | **99%** |
-
-**Session-level**: ~138,000 tokens saved per session (92% reduction on navigation/search).
-
-See [BENCHMARK.md](BENCHMARK.md) for full methodology and cost projections.
+| Component | Technology |
+|-----------|-----------|
+| Language | Rust (async, tokio) |
+| Protocol | MCP over stdio (JSON-RPC 2.0) |
+| Parsing | tree-sitter (5 language grammars) |
+| Graph | petgraph (directed graph with BFS traversal) |
+| Storage | libSQL / SQLite (two databases: code graph + learning) |
+| Hashing | xxh3 (content-based change detection) |
+| Config | TOML |
 
 ## Architecture
 
 ```
 src/
-├── main.rs                  # Entry point, async runtime
-├── lib.rs                   # Library crate (for integration tests)
-├── config.rs                # Project root detection, config.toml parsing
-├── mcp/                     # MCP protocol layer
-│   ├── protocol.rs          # JSON-RPC 2.0 + MCP types
-│   ├── transport.rs         # Stdio transport
-│   ├── server.rs            # Request dispatch
-│   └── tools.rs             # Tool registry (26 tools)
-├── store/                   # Persistence
-│   ├── db.rs                # libSQL CRUD (nodes, edges, files)
-│   ├── graph.rs             # petgraph in-memory graph
-│   └── migrations.rs        # Schema versioning
-├── code/                    # Code analysis
-│   ├── languages.rs         # Language configs + tree-sitter grammars
-│   ├── parser.rs            # Symbol/reference extraction
-│   ├── indexer.rs           # Project indexer + cross-file resolution
-│   ├── cross_language.rs    # Cross-language API inference
-│   └── queries/*.scm        # Tree-sitter queries per language
-├── session/                 # Session memory
-│   └── state.rs             # Task, decision, context management
-├── learning/                # Learning system
-│   ├── patterns.rs          # Pattern CRUD + scoped query
-│   ├── failures.rs          # Failure CRUD + severity
-│   ├── confidence.rs        # Time decay + drift detection
-│   ├── lineage.rs           # Solution tracking + retry chains
-│   ├── reflection.rs        # Solution → pattern/failure conversion
-│   ├── niches.rs            # Behavioral niche clustering
-│   ├── conflicts.rs         # Pattern conflict detection
-│   └── sync.rs              # JSON file export
-└── skill/                   # Skill distillation
-    ├── distill.rs           # Pattern → instruction conversion
-    ├── categories.rs        # Instruction categorization
-    ├── conventions.rs       # Convention clustering
-    ├── navigation.rs        # Navigation hint generation
-    └── render.rs            # SKILL.md markdown rendering
+├── main.rs              # Entry point
+├── config.rs            # Project root detection, config.toml
+├── mcp/                 # MCP protocol layer
+│   ├── protocol.rs      # JSON-RPC 2.0 + MCP types
+│   ├── transport.rs     # Stdio transport
+│   ├── server.rs        # Request dispatch, lazy init
+│   └── tools.rs         # Tool registry (26 tools)
+├── store/               # Persistence
+│   ├── db.rs            # SQLite CRUD
+│   ├── graph.rs         # In-memory petgraph
+│   └── migrations.rs    # Schema versioning
+├── code/                # Code analysis
+│   ├── parser.rs        # tree-sitter symbol extraction
+│   ├── indexer.rs       # Incremental indexing + cross-file resolution
+│   ├── languages.rs     # Language configs + grammars
+│   └── cross_language.rs
+├── session/             # Session state machine
+│   └── state.rs         # Task, decisions, context tracking
+├── learning/            # Learning system
+│   ├── patterns.rs      # Pattern storage + scoped queries
+│   ├── failures.rs      # Failure records + severity
+│   ├── confidence.rs    # Time decay + drift detection
+│   ├── lineage.rs       # Solution attempt tracking
+│   ├── reflection.rs    # Outcome → pattern/failure conversion
+│   ├── niches.rs        # Behavioral clustering
+│   └── sync.rs          # JSON export
+├── skill/               # Skill distillation
+│   ├── distill.rs       # Pattern → SKILL.md generation
+│   ├── conventions.rs   # Convention clustering
+│   └── render.rs        # Markdown rendering
+└── compress/            # Token-saving output compression
+    ├── bash.rs          # Command dispatch
+    ├── git.rs           # Git output compression
+    ├── test_output.rs   # Test result compression
+    └── analytics.rs     # Savings tracking
 ```
 
-## Development
+## Building
 
 ```bash
-cargo build            # Build
-cargo test             # Run tests (87 tests)
-cargo bench            # Run benchmarks
-cargo build --release  # Optimized build
-
-# Debug logging
-RUST_LOG=codegraph=debug cargo run
+# Prerequisites: Rust toolchain (1.70+)
+cargo build --release
+cargo test              # 87 tests
+cargo bench             # criterion benchmarks
 ```
+
+## Usage
+
+Add to your MCP client config (e.g. `~/.claude.json`):
+
+```json
+{
+  "mcpServers": {
+    "codegraph": {
+      "command": "/path/to/target/release/codegraph"
+    }
+  }
+}
+```
+
+On first run in a git repo, it creates `.codegraph/` with a default `config.toml`. Run `index_project` to build the code graph.
+
+## What I Learned
+
+This was a personal project to explore the design space of "AI agent memory." Some things that became clear along the way:
+
+- **Structured code graphs are useful but not as differentiated as expected.** LSPs and IDE-native indexing solve the same navigation problem with better type resolution. The graph is most useful for cross-file dependency traversal, less so for single-file exploration.
+- **Session memory is genuinely helpful** for long-running tasks that hit context limits, but its value shrinks as context windows grow.
+- **The learning system is the most ambitious part** and the hardest to validate. AI self-reflection produces mixed-quality records. The hypothesis that accumulated patterns improve future agent performance is plausible but unproven at scale.
+- **MCP as a protocol works well** for this kind of tool. Stdio transport is simple, the tool/resource model is clean, and lazy initialization (waiting for the client's `initialize` handshake to resolve the project root) was the right call.
 
 ## License
 
 MIT
-# codegod-mcp
