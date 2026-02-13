@@ -141,7 +141,7 @@ impl PatternStore {
         Ok(())
     }
 
-    /// Query patterns matching the given context
+    /// Query patterns matching the given context, ranked by relevance
     pub async fn query(&self, context: &QueryContext, limit: usize) -> Result<Vec<Pattern>> {
         // Get all patterns and filter by scope
         let mut rows = self
@@ -155,6 +155,7 @@ impl PatternStore {
             .await?;
 
         let mut patterns = Vec::new();
+        let query_words = text_tokens(&context.description);
 
         while let Some(row) = rows.next().await? {
             let examples_json: String = row.get(3)?;
@@ -191,7 +192,15 @@ impl PatternStore {
             }
         }
 
-        // Take limit
+        // Rank by relevance: keyword overlap between query and intent+tags+mechanism
+        if !query_words.is_empty() {
+            patterns.sort_by(|a, b| {
+                let score_a = relevance_score(a, &query_words);
+                let score_b = relevance_score(b, &query_words);
+                score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+
         patterns.truncate(limit);
 
         Ok(patterns)
@@ -247,6 +256,58 @@ impl PatternStore {
             .await?;
         Ok(())
     }
+}
+
+/// Extract lowercase keywords from text (3+ chars, no stop words)
+fn text_tokens(text: &str) -> Vec<String> {
+    let stop_words = [
+        "the", "and", "for", "with", "this", "that", "from", "are", "was",
+        "how", "does", "what", "which", "where", "when", "who", "all", "can",
+        "has", "have", "had", "not", "but", "use", "using",
+    ];
+    text.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .map(|w| w.to_lowercase())
+        .filter(|w| w.len() >= 3 && !stop_words.contains(&w.as_str()))
+        .collect()
+}
+
+/// Score a pattern's relevance to query keywords
+/// Combines keyword overlap (0.0-1.0) with confidence (0.0-1.0)
+fn relevance_score(pattern: &Pattern, query_words: &[String]) -> f32 {
+    if query_words.is_empty() {
+        return pattern.confidence;
+    }
+
+    // Collect all searchable text from the pattern
+    let mut pattern_text = pattern.intent.clone();
+    if let Some(ref mech) = pattern.mechanism {
+        pattern_text.push(' ');
+        pattern_text.push_str(mech);
+    }
+    for tag in &pattern.scope.tags {
+        pattern_text.push(' ');
+        pattern_text.push_str(tag);
+    }
+    for ex in &pattern.examples {
+        pattern_text.push(' ');
+        pattern_text.push_str(ex);
+    }
+
+    let pattern_tokens = text_tokens(&pattern_text);
+    if pattern_tokens.is_empty() {
+        return pattern.confidence * 0.1;
+    }
+
+    // Count how many query words appear in the pattern
+    let matches = query_words
+        .iter()
+        .filter(|qw| pattern_tokens.iter().any(|pt| pt.contains(qw.as_str()) || qw.contains(pt.as_str())))
+        .count();
+
+    let keyword_score = matches as f32 / query_words.len() as f32;
+
+    // Weighted: 60% keyword relevance, 40% confidence
+    keyword_score * 0.6 + pattern.confidence * 0.4
 }
 
 #[cfg(test)]

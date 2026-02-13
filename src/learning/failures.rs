@@ -195,6 +195,23 @@ impl FailureStore {
             }
         }
 
+        // Rank by relevance to query (critical failures stay at top due to stable sort)
+        let query_words = text_tokens(&context.description);
+        if !query_words.is_empty() {
+            failures.sort_by(|a, b| {
+                // Critical failures always first
+                let sev_a = severity_rank(&a.severity);
+                let sev_b = severity_rank(&b.severity);
+                if sev_a != sev_b {
+                    return sev_a.cmp(&sev_b);
+                }
+                // Within same severity, rank by keyword relevance
+                let score_a = failure_relevance(a, &query_words);
+                let score_b = failure_relevance(b, &query_words);
+                score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+
         Ok(failures)
     }
 
@@ -238,6 +255,50 @@ impl FailureStore {
             .await?;
         Ok(())
     }
+}
+
+/// Extract lowercase keywords from text (3+ chars, no stop words)
+fn text_tokens(text: &str) -> Vec<String> {
+    let stop_words = [
+        "the", "and", "for", "with", "this", "that", "from", "are", "was",
+        "how", "does", "what", "which", "where", "when", "who", "all", "can",
+        "has", "have", "had", "not", "but", "use", "using",
+    ];
+    text.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .map(|w| w.to_lowercase())
+        .filter(|w| w.len() >= 3 && !stop_words.contains(&w.as_str()))
+        .collect()
+}
+
+fn severity_rank(s: &Severity) -> u8 {
+    match s {
+        Severity::Critical => 0,
+        Severity::Major => 1,
+        Severity::Minor => 2,
+    }
+}
+
+/// Score a failure's relevance to query keywords
+fn failure_relevance(failure: &Failure, query_words: &[String]) -> f32 {
+    if query_words.is_empty() {
+        return 0.0;
+    }
+    let mut text = failure.cause.clone();
+    text.push(' ');
+    text.push_str(&failure.avoidance_rule);
+    for tag in &failure.scope.tags {
+        text.push(' ');
+        text.push_str(tag);
+    }
+    let tokens = text_tokens(&text);
+    if tokens.is_empty() {
+        return 0.0;
+    }
+    let matches = query_words
+        .iter()
+        .filter(|qw| tokens.iter().any(|t| t.contains(qw.as_str()) || qw.contains(t.as_str())))
+        .count();
+    matches as f32 / query_words.len() as f32
 }
 
 #[cfg(test)]
