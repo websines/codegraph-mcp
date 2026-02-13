@@ -71,30 +71,81 @@ src/
     └── analytics.rs     # Savings tracking
 ```
 
-## Building
+## Setup
+
+### 1. Build
 
 ```bash
-# Prerequisites: Rust toolchain (1.70+)
+git clone https://github.com/subhankar-chowdhury/codegraph-mcp.git
+cd codegraph-mcp
 cargo build --release
-cargo test              # 87 tests
-cargo bench             # criterion benchmarks
 ```
 
-## Usage
+The binary will be at `target/release/codegraph`.
 
-Add to your MCP client config (e.g. `~/.claude.json`):
+### 2. Add to your MCP client
+
+The server communicates over **stdio** (newline-delimited JSON-RPC 2.0) — your MCP client must connect via stdio transport, not HTTP/SSE. Add it to whichever MCP client you use:
+
+**Claude Code** (`~/.claude.json`):
 
 ```json
 {
   "mcpServers": {
     "codegraph": {
-      "command": "/path/to/target/release/codegraph"
+      "command": "/absolute/path/to/codegraph-mcp/target/release/codegraph",
+      "type": "stdio"
     }
   }
 }
 ```
 
-On first run in a git repo, it creates `.codegraph/` with a default `config.toml`. Run `index_project` to build the code graph.
+**Cursor** (`.cursor/mcp.json` in your project root):
+
+```json
+{
+  "mcpServers": {
+    "codegraph": {
+      "command": "/absolute/path/to/codegraph-mcp/target/release/codegraph",
+      "type": "stdio"
+    }
+  }
+}
+```
+
+Replace `/absolute/path/to/codegraph-mcp` with wherever you cloned the repo.
+
+### 3. First run
+
+When you start a session in any git repo, Codegraph will:
+1. Auto-detect the project root (walks up looking for `.git/`)
+2. Create a `.codegraph/` directory with a default `config.toml`
+3. Wait for you to index — run `index_project(full: true)` to build the code graph
+
+After the initial index, subsequent sessions only need `index_project()` (incremental — skips unchanged files) or nothing at all if you haven't changed code.
+
+### 4. Configuration (optional)
+
+Edit `.codegraph/config.toml` to customize:
+
+```toml
+[indexing]
+exclude = ["node_modules", "target", ".git", "dist", "build", "__pycache__"]
+max_file_size = 1048576  # 1 MiB
+
+[learning]
+decay_half_life = 90  # days
+
+[cross_language]
+enabled = true
+```
+
+### Running tests
+
+```bash
+cargo test              # 87 tests
+cargo bench             # criterion benchmarks
+```
 
 ## What I Learned
 
