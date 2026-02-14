@@ -149,7 +149,21 @@ cargo bench             # criterion benchmarks
 
 ## Benchmarks
 
-Independently tested on a 395K-line, 974-file codebase (Python + Rust + TypeScript) across 4 configurations: Vanilla (grep/read), Serena (LSP), Codegraph, and Serena+Codegraph combined.
+Independently tested on a 111K-line Python codebase across 5 configurations: Vanilla (grep/read), Serena (LSP), Codegraph, Serena+Codegraph, and Codegraph with bad usage patterns. All numbers from actual measured runs.
+
+### Multi-Step Refactoring Task (The Real Test)
+
+A realistic 10-step investigation task (read method, find callers, check tests, understand interfaces, produce refactoring plan). This is where per-query savings compound.
+
+| Rank | Config | Tokens | vs Vanilla |
+|------|--------|--------|------------|
+| 1 | **CG-only (compact)** | **36,790** | **-23%** |
+| 2 | S+CG | 45,424 | -5% |
+| 3 | Vanilla | 47,693 | baseline |
+| 4 | Serena-only | 76,228 | +60% |
+| 5 | CG-only (bad usage) | 78,051 | +64% |
+
+Same accuracy across all five configs. Pure cost difference. Compact mode is the default — the agent gets overviews first and requests source for specific symbols only when needed.
 
 ### Per-Query Token Savings
 
@@ -160,24 +174,7 @@ Independently tested on a 395K-line, 974-file codebase (Python + Rust + TypeScri
 | "What's in diagnosis.py?" | 14,503 tokens | 1,382 tokens | **90% (10x)** |
 | "Resume after compaction" | ~20,000 tokens | 95 tokens | **99.5% (210x)** |
 
-Codegraph's cost scales with answer size, not file size — the gap widens on larger codebases:
-
-| Codebase Size | Grep/Read Cost | Codegraph Cost | Gap |
-|---------------|---------------|----------------|-----|
-| 1K lines | ~250 tokens | ~150 tokens | 1.7x |
-| 100K lines | ~15,000 tokens | ~500 tokens | 30x |
-| 395K lines | ~42,000 tokens | ~600 tokens | 70x |
-
-### Four-Config Comparison (3 navigation tasks)
-
-| Config | Total Tokens | Accuracy | Tokens per Correct Answer |
-|--------|-------------|----------|--------------------------|
-| Vanilla (grep/read) | 82,739 | 2.5/3 | 33,096 |
-| Serena (LSP) | 76,921 | 2.5/3 | 30,768 |
-| **Codegraph** | **89,368** | **3/3** | **29,789** |
-| Serena + Codegraph | 105,760 | 3/3 | 35,253 |
-
-Codegraph has the best tokens-per-correct-answer ratio. Vanilla grep wins on raw token cost for simple text search, but misses semantic accuracy on cross-file tracing.
+Codegraph's cost scales with answer size, not file size — the gap widens on larger codebases.
 
 ### Learning System (10-Session Evolution Test)
 
@@ -187,13 +184,14 @@ Codegraph has the best tokens-per-correct-answer ratio. Vanilla grep wins on raw
 - **Pattern retrieval**: Working. `recall_patterns` surfaces relevant patterns scoped by file paths and tags, with confidence scoring and time decay.
 - **Failure recall**: Working. `recall_failures` always includes critical-severity failures and filters others by scope relevance.
 
-See [BENCHMARK.md](BENCHMARK.md) for full methodology, per-task breakdowns, and accuracy analysis.
+See [BENCHMARK.md](BENCHMARK.md) for full methodology, all 5 configs, per-task breakdowns, and accuracy analysis.
 
 ## What I Learned
 
 This was a self-use project to explore the design space of "AI agent memory." Some takeaways:
 
-- **The code graph's value is situational.** On small repos, grep is fine. On large codebases, the per-query savings (26-281x) are real and compound across a session.
+- **Compact mode is everything.** Codegraph with `compact=true` (the default) is 23% cheaper and 32% faster than vanilla grep/read. With `include_source=true` on whole files, it's 64% *worse*. The value is in structured overviews, not dumping source through an extra protocol layer.
+- **The code graph's value compounds over a session.** On isolated single queries, fixed agent overhead buries the savings. On multi-step tasks with 18+ queries, per-query savings (26-281x) dominate.
 - **Session memory is genuinely helpful** for long-running tasks that hit context limits, though its value shrinks as context windows grow.
 - **The learning system compounds.** Approach generation noticeably improves over sessions as patterns accumulate. The "When X, do Y because Z" format produces actionable, reusable knowledge.
 - **MCP as a protocol works well** for this kind of tool. Stdio transport is simple, the tool/resource model is clean, and lazy initialization (waiting for the client's `initialize` handshake to resolve the project root) was the right call.
