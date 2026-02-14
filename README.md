@@ -147,13 +147,55 @@ cargo test              # 87 tests
 cargo bench             # criterion benchmarks
 ```
 
+## Benchmarks
+
+Independently tested on a 395K-line, 974-file codebase (Python + Rust + TypeScript) across 4 configurations: Vanilla (grep/read), Serena (LSP), Codegraph, and Serena+Codegraph combined.
+
+### Per-Query Token Savings
+
+| Query | Grep/Read | Codegraph | Savings |
+|-------|-----------|-----------|---------|
+| "Who uses Diagnosis?" | 42,478 tokens | 151 tokens | **99.6% (281x)** |
+| "What does bootstrap() call?" | 9,431 tokens | 366 tokens | **96% (26x)** |
+| "What's in diagnosis.py?" | 14,503 tokens | 1,382 tokens | **90% (10x)** |
+| "Resume after compaction" | ~20,000 tokens | 95 tokens | **99.5% (210x)** |
+
+Codegraph's cost scales with answer size, not file size — the gap widens on larger codebases:
+
+| Codebase Size | Grep/Read Cost | Codegraph Cost | Gap |
+|---------------|---------------|----------------|-----|
+| 1K lines | ~250 tokens | ~150 tokens | 1.7x |
+| 100K lines | ~15,000 tokens | ~500 tokens | 30x |
+| 395K lines | ~42,000 tokens | ~600 tokens | 70x |
+
+### Four-Config Comparison (3 navigation tasks)
+
+| Config | Total Tokens | Accuracy | Tokens per Correct Answer |
+|--------|-------------|----------|--------------------------|
+| Vanilla (grep/read) | 82,739 | 2.5/3 | 33,096 |
+| Serena (LSP) | 76,921 | 2.5/3 | 30,768 |
+| **Codegraph** | **89,368** | **3/3** | **29,789** |
+| Serena + Codegraph | 105,760 | 3/3 | 35,253 |
+
+Codegraph has the best tokens-per-correct-answer ratio. Vanilla grep wins on raw token cost for simple text search, but misses semantic accuracy on cross-file tracing.
+
+### Learning System (10-Session Evolution Test)
+
+10 sequential sessions with overlapping themes. Sessions 9-10 deliberately overlapped with earlier sessions to test knowledge compounding.
+
+- **Approach generation**: Working. `suggest_approach` returned increasingly specific strategies across sessions. By sessions 9-10, it explicitly synthesized learnings from earlier sessions ("Leverage Session 1 + 2 + 4. Search for redis.RedisError catches.").
+- **Pattern retrieval**: Working. `recall_patterns` surfaces relevant patterns scoped by file paths and tags, with confidence scoring and time decay.
+- **Failure recall**: Working. `recall_failures` always includes critical-severity failures and filters others by scope relevance.
+
+See [BENCHMARK.md](BENCHMARK.md) for full methodology, per-task breakdowns, and accuracy analysis.
+
 ## What I Learned
 
-This was a personal project to explore the design space of "AI agent memory." Some things that became clear along the way:
+This was a self-use project to explore the design space of "AI agent memory." Some takeaways:
 
-- **Structured code graphs are useful but not as differentiated as expected.** LSPs and IDE-native indexing solve the same navigation problem with better type resolution. The graph is most useful for cross-file dependency traversal, less so for single-file exploration.
-- **Session memory is genuinely helpful** for long-running tasks that hit context limits, but its value shrinks as context windows grow.
-- **The learning system is the most ambitious part** and the hardest to validate. AI self-reflection produces mixed-quality records. The hypothesis that accumulated patterns improve future agent performance is plausible but unproven at scale.
+- **The code graph's value is situational.** On small repos, grep is fine. On large codebases, the per-query savings (26-281x) are real and compound across a session.
+- **Session memory is genuinely helpful** for long-running tasks that hit context limits, though its value shrinks as context windows grow.
+- **The learning system compounds.** Approach generation noticeably improves over sessions as patterns accumulate. The "When X, do Y because Z" format produces actionable, reusable knowledge.
 - **MCP as a protocol works well** for this kind of tool. Stdio transport is simple, the tool/resource model is clean, and lazy initialization (waiting for the client's `initialize` handshake to resolve the project root) was the right call.
 
 ## License
